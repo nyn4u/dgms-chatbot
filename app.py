@@ -17,7 +17,8 @@ load_dotenv()
 st.set_page_config(
     page_title="DGMS Mines Rules Chatbot",
     page_icon="⛏️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded" # Keep sidebar open initially
 )
 
 # --- Caching Functions for Performance ---
@@ -28,25 +29,22 @@ def load_and_process_docs():
     Loads PDF documents from the 'docs' directory and processes them.
     This function is cached to avoid reloading and splitting on every run.
     """
-    # Ensure the 'docs' directory exists
     if not os.path.exists("docs"):
         st.error("The 'docs' directory is missing. Please create it and add your DGMS PDF files.")
         st.stop()
         
-    # Load documents from the specified directory
     loader = PyPDFDirectoryLoader("docs")
     documents = loader.load()
     if not documents:
         st.error("No PDF documents found in the 'docs' directory. Please add your DGMS files.")
         st.stop()
 
-    # Split the documents into smaller, manageable chunks
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
     docs = text_splitter.split_documents(documents)
     return docs
 
 @st.cache_resource
-def create_vector_store(_docs): # The underscore indicates the input is used for caching but not directly in the function body
+def create_vector_store(_docs):
     """
     Creates and saves a FAISS vector store from the document chunks.
     This function is cached to avoid re-creating the index on every run.
@@ -57,19 +55,75 @@ def create_vector_store(_docs): # The underscore indicates the input is used for
 
 # --- Main App Logic ---
 
-st.title("⛏️ DGMS Mines Rules & Regulations Chatbot")
+# Custom CSS for a professional dark theme
 st.markdown("""
     <style>
+        /* Main app background */
         .stApp {
-            background-color: #f0f2f6;
+            background-color: #0E1117;
+            color: #FAFAFA;
         }
-        .stTextInput > div > div > input {
-            background-color: #ffffff;
+        /* Sidebar styling */
+        .st-emotion-cache-163ttbj {
+            background-color: #1E1E1E;
+        }
+        /* Chat input box */
+        .st-emotion-cache-16txtl3 {
+            background-color: #262730;
+            border-radius: 0.5rem;
+        }
+        /* Sidebar buttons */
+        .st-emotion-cache-1v0mbdj > button {
+            width: 100%;
+            background-color: #262730;
+            border: 1px solid #4A4A4A;
+            color: #FAFAFA;
+            transition: background-color 0.3s ease;
+        }
+        .st-emotion-cache-1v0mbdj > button:hover {
+            background-color: #4A4A4A;
+            color: #FFFFFF;
+        }
+        /* Expander styling */
+        .st-emotion-cache-p5msec {
+            background-color: #1E1E1E;
+            border: 1px solid #4A4A4A;
+        }
+        /* Source text area */
+        .stTextArea textarea {
+            background-color: #0E1117;
+            color: #D1D1D1;
+            border: 1px solid #4A4A4A;
         }
     </style>
     """, unsafe_allow_html=True)
 
-st.info("Ask any question about the DGMS rules and regulations based on the provided documents. The chatbot will retrieve the relevant information and generate a detailed answer.")
+# --- Sidebar ---
+with st.sidebar:
+    st.header("⛏️ DGMS Chatbot")
+    st.markdown("""
+    This chatbot provides answers based on the official DGMS Mines Rules and Regulations documents.
+    
+    It uses a **Retrieval-Augmented Generation (RAG)** model to ensure the information is accurate and contextually relevant.
+    """)
+    
+    st.header("Example Questions")
+    example_questions = [
+        "What are the duties of a Welfare Officer?",
+        "What are the rules for first-aid stations?",
+        "Explain the precautions against fire in underground mines.",
+        "What is the procedure for reporting accidents?"
+    ]
+    # Use a unique key for each button to avoid conflicts
+    for i, question in enumerate(example_questions):
+        if st.button(question, key=f"example_{i}"):
+            st.session_state.user_query = question
+            # Rerun to process the button click immediately
+            st.rerun()
+
+# --- Main Content ---
+st.title("DGMS Mines Rules & Regulations Assistant")
+st.markdown("Your expert assistant for navigating DGMS rules. Ask a question below or select an example from the sidebar.")
 
 # Load Groq API Key from Streamlit secrets
 groq_api_key = st.secrets.get("GROQ_API_KEY")
@@ -77,8 +131,8 @@ if not groq_api_key:
     st.error("GROQ_API_KEY is not set in Streamlit secrets. Please add it to proceed.")
     st.stop()
 
-# Load and process documents
-with st.spinner("Loading and processing documents... This may take a moment on first run."):
+# Load and process documents, showing a spinner
+with st.spinner("Initializing the knowledge base... This may take a moment on the first run."):
     docs = load_and_process_docs()
     vector_store = create_vector_store(docs)
 
@@ -92,54 +146,69 @@ llm = ChatGroq(
 prompt = ChatPromptTemplate.from_template(
     """
     You are an expert assistant for answering questions based on the DGMS Mines Rules and Regulations.
-    Answer the user's question strictly based on the context provided below.
-    - If the information is not in the context, clearly state that the answer is not available in the provided documents.
-    - Provide a detailed and well-structured answer.
-    - For each piece of information, cite the source document and page number.
+    Your response must be professional, detailed, and strictly based on the context provided.
 
-    Context:
+    **Instructions:**
+    1.  Answer the user's question using only the information present in the context below.
+    2.  If the context does not contain the answer, state clearly: "The information is not available in the provided documents."
+    3.  Structure your answer clearly. Use bullet points or numbered lists if it helps readability.
+    4.  At the end of your answer, you MUST cite the sources you used in the format: `[Source: Document Name, Page: Page Number]`.
+
+    **Context:**
     {context}
 
-    Question: {input}
+    **Question:** {input}
 
-    Answer:
+    **Answer:**
     """
 )
 
 # Create the chains for document processing and retrieval
 document_chain = create_stuff_documents_chain(llm, prompt)
-retriever = vector_store.as_retriever(search_kwargs={"k": 5}) # Retrieve top 5 relevant chunks
+retriever = vector_store.as_retriever(search_kwargs={"k": 5})
 retrieval_chain = create_retrieval_chain(retriever, document_chain)
 
-# User input
-user_query = st.text_input("Ask your question:", placeholder="e.g., What are the duties of a Welfare Officer?")
+# Initialize chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-if user_query:
-    with st.spinner("Searching for the answer..."):
-        response = retrieval_chain.invoke({"input": user_query})
-        
-        # Display the answer
-        st.subheader("Answer")
-        st.write(response['answer'])
-        
-        # Display the sources in an expander
-        with st.expander("Show Sources"):
-            st.subheader("Sources Used to Generate the Answer:")
-            unique_sources = {}
-            for doc in response['context']:
-                source = os.path.basename(doc.metadata.get('source', 'Unknown'))
-                page = doc.metadata.get('page', 'N/A')
-                if page != 'N/A':
-                    page += 1 # Page numbers are 0-indexed
-                
-                # Use a tuple of (source, page) as the key to handle uniqueness
-                source_key = (source, page)
-                if source_key not in unique_sources:
-                    unique_sources[source_key] = doc.page_content
+# Display chat messages from history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-            if unique_sources:
-                for (source, page), content in unique_sources.items():
-                    st.markdown(f"**📄 Document:** `{source}`  **Page:** `{page}`")
-                    st.text_area(label="", value=content, height=150, key=f"source_{source}_{page}")
-            else:
-                st.write("No specific source documents were retrieved for this query.")
+# Handle user input from text input or sidebar buttons
+user_input = st.session_state.pop("user_query", None) or st.chat_input("Ask your question about DGMS rules...")
+
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            response = retrieval_chain.invoke({"input": user_input})
+            full_response = response['answer']
+            
+            st.markdown(full_response)
+            
+            with st.expander("Show Sources Used"):
+                unique_sources = {}
+                for doc in response['context']:
+                    source = os.path.basename(doc.metadata.get('source', 'Unknown'))
+                    page = doc.metadata.get('page', 'N/A')
+                    if page != 'N/A':
+                        page += 1
+                    
+                    source_key = (source, page)
+                    if source_key not in unique_sources:
+                        unique_sources[source_key] = doc.page_content
+
+                if unique_sources:
+                    for (source, page), content in unique_sources.items():
+                        st.markdown(f"**📄 Document:** `{source}`  **Page:** `{page}`")
+                        st.text_area(label="", value=content, height=150, key=f"source_{source}_{page}")
+                else:
+                    st.warning("No specific source documents were retrieved to formulate this answer.")
+
+    st.session_state.messages.append({"role": "assistant", "content": full_response})
