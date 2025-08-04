@@ -2,7 +2,7 @@ import os
 import tempfile
 import streamlit as st
 from dotenv import load_dotenv
-from langchain_community.document_loaders import PyPDFDirectoryLoader
+from langchain_community.document_loaders import PyPDFDirectoryLoader, PyPDFLoader # <-- FIX: Added PyPDFLoader import
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -70,12 +70,12 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # Initialize session state variables
+if "vector_store" not in st.session_state:
+    st.session_state.vector_store = load_and_process_dgms_docs()
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "feedback" not in st.session_state:
     st.session_state.feedback = {}
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = load_and_process_dgms_docs()
 if "knowledge_base_name" not in st.session_state:
     st.session_state.knowledge_base_name = "DGMS Knowledge Base"
 
