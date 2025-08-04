@@ -2,7 +2,7 @@ import os
 import tempfile
 import streamlit as st
 from dotenv import load_dotenv
-from langchain_community.document_loaders import PyPDFDirectoryLoader, PyPDFLoader # <-- FIX: Added PyPDFLoader import
+from langchain_community.document_loaders import PyPDFDirectoryLoader, PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -171,24 +171,34 @@ if user_input:
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             llm = ChatGroq(api_key=groq_api_key, model="llama3-8b-8192")
-            retriever = st.session_state.vector_store.as_retriever()
+            retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 8}) # <-- FIX: Increased retrieved chunks to 8
 
+            # 1. History-aware retriever chain
             contextualize_q_system_prompt = """Given a chat history and the latest user question which might reference context in the chat history, formulate a standalone question which can be understood without the chat history. Do NOT answer the question, just reformulate it if needed and otherwise return it as is."""
             contextualize_q_prompt = ChatPromptTemplate.from_messages([("system", contextualize_q_system_prompt), MessagesPlaceholder("chat_history"), ("human", "{input}")])
             history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
+            # 2. Question-Answering chain with improved prompt
             qa_system_prompt = """You are an expert assistant for answering questions based on provided documents. Your response must be professional, detailed, and strictly based on the context provided.
+
             **Instructions:**
-            1. Answer the user's question using only the information present in the context.
-            2. If the context does not contain the answer, state clearly: "The information is not available in the provided documents."
-            3. Structure your answer clearly. Use bullet points or numbered lists if it helps readability.
-            4. At the end of your answer, you MUST cite the sources you used in the format: `[Source: Document Name, Page: Page Number]`.
-            **Context:** {context}
+            1. Synthesize a comprehensive answer from ALL the provided context snippets. Do not rely on just one piece of context.
+            2. Answer the user's question using ONLY the information present in the context. Do not use any external knowledge.
+            3. If the user asks for a list of items (like subjects, duties, etc.), meticulously scan all context snippets to find and compile the complete list.
+            4. If the context does not contain the information to answer the question, state clearly: "Based on the provided documents, I cannot answer this question."
+            5. Structure your answer clearly. Use bullet points or numbered lists for better readability.
+            6. At the end of your answer, you MUST cite the sources you used in the format: `[Source: Document Name, Page: Page Number]`.
+
+            **Context:**
+            {context}
+
             **Question:** {input}
+
             **Answer:**"""
             qa_prompt = ChatPromptTemplate.from_messages([("system", qa_system_prompt), MessagesPlaceholder("chat_history"), ("human", "{input}")])
             question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
 
+            # 3. Combine into the final RAG chain
             rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
 
             response = rag_chain.invoke({"input": user_input, "chat_history": st.session_state.chat_history})
