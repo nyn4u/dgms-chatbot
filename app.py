@@ -6,7 +6,7 @@ from langchain_community.document_loaders import PyPDFDirectoryLoader, PyPDFLoad
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_groq import ChatGroq
+from langchain_groq import ChatGroq 
 from groq import BadRequestError
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -46,7 +46,6 @@ def load_and_process_dgms_docs():
         st.error("No PDF documents found in the 'docs' directory. Please add your DGMS files.")
         st.stop()
 
-    # FIX: Reduced chunk size for better stability
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
     docs = text_splitter.split_documents(documents)
     
@@ -107,7 +106,6 @@ with st.sidebar:
                         loader = PyPDFLoader(tmpfile.name)
                         all_docs.extend(loader.load())
                 
-                # FIX: Reduced chunk size for user uploads as well
                 text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
                 docs_chunks = text_splitter.split_documents(all_docs)
                 
@@ -229,7 +227,7 @@ if user_input:
                 st.session_state.chat_history.append(HumanMessage(content=user_input))
                 st.session_state.chat_history.append(AIMessage(content=full_response))
 
-            except BadRequestError as e:
+            except BadRequestError:
                 full_response = "The model could not process the request as it was too large. Please try rephrasing your question or breaking it into smaller parts."
                 st.error(full_response)
                 st.session_state.chat_history.append(HumanMessage(content=user_input))
@@ -240,4 +238,3 @@ if user_input:
                 st.error(full_response)
                 st.session_state.chat_history.append(HumanMessage(content=user_input))
                 st.session_state.chat_history.append(AIMessage(content=full_response))
-
