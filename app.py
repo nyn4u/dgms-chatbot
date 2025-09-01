@@ -170,7 +170,7 @@ if user_input:
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            llm = ChatGroq(api_key=groq_api_key, model="llama3-8b-8192")
+            llm = ChatGroq(api_key=groq_api_key, model="llama-3.3-70b-versatile")
             retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 8}) # <-- FIX: Increased retrieved chunks to 8
 
             # 1. History-aware retriever chain
