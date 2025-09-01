@@ -6,7 +6,8 @@ from langchain_community.document_loaders import PyPDFDirectoryLoader, PyPDFLoad
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_groq import ChatGroq
+from langchain_groq import ChatGroq, Groq
+from groq import BadRequestError
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -45,7 +46,8 @@ def load_and_process_dgms_docs():
         st.error("No PDF documents found in the 'docs' directory. Please add your DGMS files.")
         st.stop()
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+    # FIX: Reduced chunk size for better stability
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
     docs = text_splitter.split_documents(documents)
     
     embeddings = create_embeddings_model()
@@ -105,7 +107,8 @@ with st.sidebar:
                         loader = PyPDFLoader(tmpfile.name)
                         all_docs.extend(loader.load())
                 
-                text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+                # FIX: Reduced chunk size for user uploads as well
+                text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
                 docs_chunks = text_splitter.split_documents(all_docs)
                 
                 embeddings = create_embeddings_model()
@@ -168,62 +171,73 @@ if user_input:
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            llm = ChatGroq(api_key=groq_api_key, model="llama3-8b-8192")
-            
-            # FIX: Reduced 'k' to 2 for maximum stability
-            retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 2})
-
-            # FIX: Trim history to last 1 pair (2 messages) for stability
-            trimmed_history = st.session_state.chat_history[-2:]
-
-            # 1. History-aware retriever chain
-            contextualize_q_system_prompt = """Given a chat history and the latest user question which might reference context in the chat history, formulate a standalone question which can be understood without the chat history. Do NOT answer the question, just reformulate it if needed and otherwise return it as is."""
-            contextualize_q_prompt = ChatPromptTemplate.from_messages([("system", contextualize_q_system_prompt), MessagesPlaceholder("chat_history"), ("human", "{input}")])
-            history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
-
-            # 2. Question-Answering chain
-            qa_system_prompt = """You are an expert assistant for answering questions based on provided documents. Your response must be professional, detailed, and strictly based on the context provided.
-
-            **Instructions:**
-            1. Synthesize a comprehensive answer from ALL the provided context snippets.
-            2. Answer using ONLY the information present in the context. Do not use external knowledge.
-            3. If the context does not contain the answer, state clearly: "Based on the provided documents, I cannot answer this question."
-            4. Structure your answer clearly. Use bullet points or numbered lists if helpful.
-            5. At the end of your answer, cite the sources you used in the format: `[Source: Document Name, Page: Page Number]`.
-
-            **Context:**
-            {context}
-
-            **Question:** {input}
-
-            **Answer:**"""
-            qa_prompt = ChatPromptTemplate.from_messages([("system", qa_system_prompt), MessagesPlaceholder("chat_history"), ("human", "{input}")])
-            question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
-
-            # 3. Combine into the final RAG chain
-            rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
-
-            response = rag_chain.invoke({"input": user_input, "chat_history": trimmed_history})
-            full_response = response['answer']
-            st.markdown(full_response)
-
-            with st.expander("Show Sources Used"):
-                unique_sources = {}
-                for doc in response['context']:
-                    source = os.path.basename(doc.metadata.get('source', 'Unknown'))
-                    page = doc.metadata.get('page', 'N/A')
-                    if page != 'N/A': page += 1
-                    source_key = (source, page)
-                    if source_key not in unique_sources:
-                        unique_sources[source_key] = doc.page_content
+            try:
+                llm = ChatGroq(api_key=groq_api_key, model="llama3-8b-8192")
                 
-                if unique_sources:
-                    for (source, page), content in unique_sources.items():
-                        st.markdown(f"**📄 Document:** `{source}`  **Page:** `{page}`")
-                        st.text_area(label="", value=content, height=150, key=f"source_{source}_{page}_{user_input}")
-                else:
-                    st.warning("No specific source documents were retrieved to formulate this answer.")
+                retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 1})
 
-    st.session_state.chat_history.append(HumanMessage(content=user_input))
-    st.session_state.chat_history.append(AIMessage(content=full_response))
+                trimmed_history = st.session_state.chat_history[-2:]
+
+                # 1. History-aware retriever chain
+                contextualize_q_system_prompt = """Given a chat history and the latest user question which might reference context in the chat history, formulate a standalone question which can be understood without the chat history. Do NOT answer the question, just reformulate it if needed and otherwise return it as is."""
+                contextualize_q_prompt = ChatPromptTemplate.from_messages([("system", contextualize_q_system_prompt), MessagesPlaceholder("chat_history"), ("human", "{input}")])
+                history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
+
+                # 2. Question-Answering chain
+                qa_system_prompt = """You are an expert assistant for answering questions based on provided documents. Your response must be professional, detailed, and strictly based on the context provided.
+
+                **Instructions:**
+                1. Synthesize a comprehensive answer from ALL the provided context snippets.
+                2. Answer using ONLY the information present in the context. Do not use external knowledge.
+                3. If the context does not contain the answer, state clearly: "Based on the provided documents, I cannot answer this question."
+                4. Structure your answer clearly. Use bullet points or numbered lists if helpful.
+                5. At the end of your answer, cite the sources you used in the format: `[Source: Document Name, Page: Page Number]`.
+
+                **Context:**
+                {context}
+
+                **Question:** {input}
+
+                **Answer:**"""
+                qa_prompt = ChatPromptTemplate.from_messages([("system", qa_system_prompt), MessagesPlaceholder("chat_history"), ("human", "{input}")])
+                question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+
+                # 3. Combine into the final RAG chain
+                rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+
+                response = rag_chain.invoke({"input": user_input, "chat_history": trimmed_history})
+                full_response = response['answer']
+                st.markdown(full_response)
+
+                with st.expander("Show Sources Used"):
+                    unique_sources = {}
+                    for doc in response['context']:
+                        source = os.path.basename(doc.metadata.get('source', 'Unknown'))
+                        page = doc.metadata.get('page', 'N/A')
+                        if page != 'N/A': page += 1
+                        source_key = (source, page)
+                        if source_key not in unique_sources:
+                            unique_sources[source_key] = doc.page_content
+                    
+                    if unique_sources:
+                        for (source, page), content in unique_sources.items():
+                            st.markdown(f"**📄 Document:** `{source}`  **Page:** `{page}`")
+                            st.text_area(label="", value=content, height=150, key=f"source_{source}_{page}_{user_input}")
+                    else:
+                        st.warning("No specific source documents were retrieved to formulate this answer.")
+
+                st.session_state.chat_history.append(HumanMessage(content=user_input))
+                st.session_state.chat_history.append(AIMessage(content=full_response))
+
+            except BadRequestError as e:
+                full_response = "The model could not process the request as it was too large. Please try rephrasing your question or breaking it into smaller parts."
+                st.error(full_response)
+                st.session_state.chat_history.append(HumanMessage(content=user_input))
+                st.session_state.chat_history.append(AIMessage(content=full_response))
+            
+            except Exception as e:
+                full_response = f"An unexpected error occurred: {e}"
+                st.error(full_response)
+                st.session_state.chat_history.append(HumanMessage(content=user_input))
+                st.session_state.chat_history.append(AIMessage(content=full_response))
 
