@@ -1,8 +1,10 @@
 streamlit
-langchain-groq
-langchain
-langchain-community
-pypdf
-sentence-transformers
-faiss-cpu
 python-dotenv
+langchain==0.3.27
+langchain-community
+langchain-core
+langchain-text-splitters
+langchain-groq
+faiss-cpu
+sentence-transformers
+PyPDF2
